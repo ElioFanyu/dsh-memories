@@ -25,6 +25,23 @@ const check = (name, run) => {
 }
 
 /**
+ * The same check for anything that awaits.
+ *
+ * The reveal flow is asynchronous by definition — it asks the Host for a secret
+ * and renders the answer — so it cannot be expressed through the synchronous
+ * `check`. Errors are collected the same way so the summary stays accurate.
+ */
+const checkAsync = async (name, run) => {
+  try {
+    await run()
+    console.log(`ok   ${name}`)
+  } catch (error) {
+    failures += 1
+    console.log(`FAIL ${name}\n     ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/**
  * Install the client module with a React stand-in that keeps the element tree.
  *
  * Function components are invoked as they are met, so the result is the props
@@ -241,47 +258,49 @@ check('the address hint describes the address actually stored, not the default',
   assert.equal(/默认地址/.test(hint), false, 'and does not claim the default is in use')
 })
 
-check('a configured key shows dots in the placeholder, never part of the key', () => {
-  const inputs = collect(tree, (node) => node.tag === 'input')
-  const keyInput = inputs[2]
-  const placeholder = String(keyInput.props.placeholder)
-
-  // The box now says "something is configured" by looking filled. What it must
-  // NOT do is carry any identifiable fragment of the stored secret, which is
-  // what `hsk_f…（53 位）` inside the box used to do.
-  assert.match(placeholder, /^•+$/, 'a configured key is represented by dots')
-  assert.equal(/…（\d+ 位）/.test(placeholder), false, 'no truncated key in the placeholder')
-  assert.equal(placeholder.includes('sk-ab'), false, 'no prefix of the stored key')
-  assert.equal(placeholder.includes('hsk'), false, 'no issuer prefix either')
-  // Dots are a decoration and must be distinguishable from a real value, so the
-  // field is still an empty input: `value` stays empty and the dots are the
-  // placeholder. That is what keeps them out of the DOM as data.
-  assert.equal(keyInput.props.value, '', 'the dots are a placeholder, not a value')
-  assert.equal(keyInput.props.className, 'dsh-memories-dots', 'styled as a status decoration')
-})
-
-check('an unconfigured key keeps the plain instruction', () => {
+check('an unconfigured key shows the plain instruction, not dots', () => {
   const Component = globalThis.__sections.BackendSection
   const empty = expand(
     Component({
-      backend: { id: 'openviking', title: 'OpenViking 记忆', hint: 'h', path: 'p', configured: false, writable: true },
+      backend: {
+        id: 'openviking',
+        title: 'OpenViking 记忆',
+        hint: 'h',
+        path: 'p',
+        configured: false,
+        writable: true,
+        installed: true,
+      },
       onSaved: () => {},
     }),
   )
   const keyInput = collect(empty, (node) => node.tag === 'input')[0]
   assert.equal(String(keyInput.props.placeholder), '请输入 API Key')
+  assert.equal(keyInput.props.value, '', 'no value before anything is typed')
   assert.equal(keyInput.props.className, undefined, 'no dot styling when nothing is stored')
 })
 
-check('the dot run is capped and has a sensible floor', () => {
+check('a configured key looks filled (dots) while its value stays out of the DOM', () => {
+  const inputs = collect(tree, (node) => node.tag === 'input')
+  const keyInput = inputs[2]
+  // This is the "looks like asterisks after saving" half of the request.
+  assert.match(String(keyInput.props.placeholder), /^•+$/, 'a stored key reads as a filled field')
+  assert.equal(keyInput.props.value, '', 'but the box holds no value: the dots are a placeholder')
+  assert.equal(keyInput.props.className, 'dsh-memories-dots', 'painted as a status decoration, not grey hint text')
+  // And no fragment of the key leaks through the placeholder, unlike the old
+  // `hsk_f…（53 位）` that put five real characters on screen.
+  assert.equal(String(keyInput.props.placeholder).includes('sk-ab'), false)
+  assert.equal(String(keyInput.props.placeholder).includes('hsk'), false)
+})
+
+check('the dot run is capped and never shorter than a readable run', () => {
   const { dotPlaceholder } = globalThis.__sections
-  // A long certificate must not render a wall of bullets.
-  assert.equal(dotPlaceholder(500).length, 40)
-  // An unknown length still says "something is here".
-  assert.equal(dotPlaceholder(undefined).length, 12)
-  // Short values keep a readable run.
-  assert.ok(dotPlaceholder(3).length >= 8)
-  assert.match(dotPlaceholder(8), /^•+$/)
+  const dot = globalThis.__sections.dotPlaceholder
+  assert.equal(typeof dot, 'function', 'dotPlaceholder is exposed for this check')
+  assert.equal(dot(500).length, 40, 'a long certificate does not render a wall of bullets')
+  assert.equal(dot(undefined).length, 16, 'an unknown length still looks filled')
+  assert.ok(dot(3).length >= 8, 'short values keep a readable run')
+  assert.match(dot(35), /^•{35}$/, 'a known length matches the key')
 })
 
 check('the key hint states which key is saved, in words rather than a fake value', () => {
@@ -305,33 +324,206 @@ check('the key field never echoes a stored secret as its value', () => {
   }
 })
 
-check('a successful key save says the box now shows placeholder dots', () => {
+check('a successful key save says the box now shows masked characters', () => {
   const { successText } = globalThis.__sections
   assert.equal(typeof successText, 'function')
 
-  // The box is not empty after this change, but it is also not the key. Both
-  // halves of that have to be said, or the reader has to guess.
   const withKey = successText({ saved: ['Key'], message: '已写入 Hindsight 记忆 的 Key。' })
   assert.match(withKey, /已写入 Hindsight 记忆 的 Key。/)
-  assert.match(withKey, /占位点/, 'the dots are named')
-  assert.match(withKey, /不代表真实/, 'and explicitly disclaimed')
+  assert.match(withKey, /显示/, 'it points at the button that shows the key')
 
   // A save that did not touch the key has nothing to explain.
   const noKey = successText({ saved: ['服务地址'], message: '已写入 X 的 服务地址。' })
   assert.equal(noKey, '已写入 X 的 服务地址。')
-  assert.equal(/占位点/.test(noKey), false)
 
   // Defensive: an unexpected payload still yields a sentence, never "undefined".
   assert.equal(successText(undefined), '已保存。')
   assert.equal(successText({}), '已保存。')
 })
 
-check('the saved-key hint warns that the dots are not the key', () => {
+check('the saved-key hint tells the user 显示 will show it', () => {
   const hints = collect(tree, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
   const hint = hints.find((text) => /开头，共/.test(text))
   assert.ok(hint, 'the hint line names the saved key')
-  assert.match(hint, /占位符/, 'it calls the dots a placeholder')
-  assert.match(hint, /不代表真实内容/, 'and says they are not the stored value')
+  assert.match(hint, /显示/, 'it explains how to look at the key')
+})
+
+/**
+ * A one-component reconciler.
+ *
+ * The earlier checks render once and read the tree, which is enough for layout
+ * questions but useless for the reveal flow: that one depends on state set by a
+ * click and observed on the NEXT render. This keeps one hook list per mounted
+ * instance and re-renders that same instance after a handler runs.
+ *
+ * The module's components close over the React object the factory handed them,
+ * so this cannot inject a different one per mount. Instead the factory receives
+ * `liveReact`, whose hooks forward to whichever instance is rendering right
+ * now; `currentInstance` tracks that.
+ */
+let currentInstance = undefined
+
+/** Hook slots of the instance currently rendering, or a throwaway list. */
+function hookSlots() {
+  if (currentInstance === undefined) {
+    // A render outside render()/act(): give it isolated slots so the check
+    // fails on its assertion rather than on a confusing shared-state bug.
+    return { slots: [], cursor: 0, fresh: true }
+  }
+  return currentInstance
+}
+
+const liveReact = {
+  createElement(type, elProps, ...kids) {
+    const children = kids.length === 0 ? undefined : kids.length === 1 ? kids[0] : kids
+    return { type, props: { ...(elProps ?? {}), children } }
+  },
+  useState(initial) {
+    const owner = hookSlots()
+    if (owner.fresh === true) return [initial, () => {}]
+    const index = owner.cursor++
+    if (owner.slots[index] === undefined) owner.slots[index] = { value: initial }
+    const slot = owner.slots[index]
+    return [
+      slot.value,
+      (next) => {
+        slot.value = typeof next === 'function' ? next(slot.value) : next
+      },
+    ]
+  },
+  useCallback: (fn) => fn,
+  // Effects deliberately do not run; the reveal flow does not need one, and the
+  // seeding effects are covered by the Host-side tests.
+  useEffect: () => {},
+}
+
+/** Mount one component on `liveReact` and expose render/act. */
+function mountComponent(component, props) {
+  const instance = { slots: [], cursor: 0 }
+  const render = () => {
+    const previous = currentInstance
+    currentInstance = instance
+    instance.cursor = 0
+    try {
+      return expand(component(props))
+    } finally {
+      currentInstance = previous
+    }
+  }
+  /** Run a handler, let pending promises settle, then re-render. */
+  const act = async (run) => {
+    await run()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return render()
+  }
+  return { render, act }
+}
+
+/** Load the client module once, wired to `liveReact`. */
+function loadClientWithReconciler() {
+  globalThis.window = {
+    __ModuleLoader__: { load: (def) => { globalThis.__def2 = def } },
+    location: { origin: 'http://127.0.0.1:1' },
+  }
+  vm.runInThisContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'))
+  const mod = globalThis.__def2.factory((id) => {
+    if (id === 'react') return liveReact
+    throw new Error(`unexpected require: ${id}`)
+  })
+  mod.apply({
+    slots: {
+      inject: (_key, run) => run(),
+      register: (_options, componentToMount) => {
+        globalThis.__page2 = componentToMount
+        return () => {}
+      },
+    },
+  })
+  return globalThis.__sections
+}
+
+/* ---- the reveal flow: dots -> 显示 -> plaintext -> 隐藏 ---- */
+
+/** The key input and the reveal toggle of a rendered section. */
+const keyFieldOf = (tree) => collect(tree, (node) => node.tag === 'input')[0]
+const revealToggleOf = (tree) =>
+  collect(tree, (node) => node.tag === 'button').find((button) => /显示|隐藏|读取/.test(String(button.props.children)))
+
+const revealedBackend = {
+  id: 'hindsight',
+  title: 'Hindsight 记忆',
+  hint: 'h',
+  path: 'p',
+  configured: true,
+  writable: true,
+  installed: true,
+  masked: 'hsk_T…（29 位）',
+  mask: { prefix: 'hsk_T', length: 29 },
+  urlField: { where: 'document', label: '服务地址（可选）', placeholder: '请输入服务地址' },
+}
+
+await checkAsync('显示 fetches the stored key, shows it in clear, and 隐藏 drops it', async () => {
+  const sections = loadClientWithReconciler()
+  const secret = 'hsk_TESTFIXTURE-REVEALED-0001'
+  let calls = 0
+  const mounted = mountComponent(sections.BackendSection, {
+    backend: revealedBackend,
+    onSaved: () => {},
+    revealKey: async () => {
+      calls += 1
+      return { ok: true, value: secret }
+    },
+  })
+
+  // 1. Mount: the field looks filled, holds no value, and has fetched nothing.
+  //    Loading the page is not a request to see a secret.
+  let tree = mounted.render()
+  assert.match(String(keyFieldOf(tree).props.placeholder), /^•+$/, 'a stored key reads as filled')
+  assert.equal(keyFieldOf(tree).props.value, '', 'the secret is not in the DOM on mount')
+  assert.equal(keyFieldOf(tree).props.type, 'password', 'and it is masked')
+  assert.equal(calls, 0, 'no reveal on mount')
+
+  // 2. Press 显示: exactly one fetch, and the value becomes visible in clear.
+  tree = await mounted.act(() => revealToggleOf(tree).props.onClick())
+  assert.equal(calls, 1, 'pressing 显示 fetches the key')
+  assert.equal(keyFieldOf(tree).props.value, secret, 'the key is now in the field')
+  assert.equal(keyFieldOf(tree).props.type, 'text', 'and shown in clear')
+  assert.equal(String(revealToggleOf(tree).props.children), '隐藏', 'the button flipped')
+
+  // 3. Press 隐藏: masked again, secret gone, and no second fetch.
+  tree = await mounted.act(() => revealToggleOf(tree).props.onClick())
+  assert.equal(keyFieldOf(tree).props.value, '', 'the secret is dropped from the field')
+  assert.equal(keyFieldOf(tree).props.type, 'password', 'masked again')
+  assert.equal(calls, 1, 'no second fetch just to hide it')
+  assert.match(String(keyFieldOf(tree).props.placeholder), /^•+$/, 'dots come back')
+})
+
+await checkAsync('a failed 显示 explains itself instead of silently doing nothing', async () => {
+  const sections = loadClientWithReconciler()
+  const mounted = mountComponent(sections.BackendSection, {
+    backend: revealedBackend,
+    onSaved: () => {},
+    revealKey: async () => ({ ok: false, error: '还没有保存 Hindsight 的 API Token' }),
+  })
+  let tree = mounted.render()
+  tree = await mounted.act(() => revealToggleOf(tree).props.onClick())
+  const texts = collect(tree, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
+  assert.ok(
+    texts.some((text) => text.includes('还没有保存')),
+    `the Host error is shown; saw: ${JSON.stringify(texts)}`,
+  )
+  // A failed reveal must not pretend to have succeeded.
+  assert.equal(keyFieldOf(tree).props.type, 'password')
+})
+
+/* ---- checks that only need a single render ---- */
+
+check('a stored key is never part of the status payload', () => {
+  // The page's own data must not contain a secret: it may show THAT a key is
+  // configured, never the key. Revealing is a separate, explicit request.
+  const payload = JSON.stringify(backend)
+  assert.equal(payload.includes('sk-ab…'), true, 'the masked form is present')
+  assert.equal(/sk-ab[a-z0-9]{10,}/i.test(payload), false, 'no full key')
 })
 
 check('the save outcome renders below the button, not as a caption beside it', () => {

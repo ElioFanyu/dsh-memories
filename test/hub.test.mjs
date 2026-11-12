@@ -533,6 +533,107 @@ await check('an invalid endpoint is refused before the row is touched', async ()
   assert.equal(edits.length, 0)
 })
 
+/* ---------------- revealing a stored secret ---------------- */
+
+await check('reveal returns the stored key for a file backend', async () => {
+  await writeFile(hindsightFile, JSON.stringify({ apiToken: 'hsk_REVEALTEST0123456789', apiUrl: 'https://x' }), 'utf8')
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/reveal',
+    body: { target: 'hindsight' },
+  })
+  assert.equal(result.status, 200)
+  assert.equal(result.json.ok, true)
+  assert.equal(result.json.value, 'hsk_REVEALTEST0123456789')
+})
+
+await check('reveal reads AgentArts out of the credential store', async () => {
+  const credentials = makeCredentialStore({ AGENTARTS_MEMORY_API_KEY: 'sk-agentarts-reveal' })
+  const { ctx } = mount({ credentials })
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/reveal',
+    body: { target: 'agentarts' },
+  })
+  assert.equal(result.json.ok, true)
+  assert.equal(result.json.value, 'sk-agentarts-reveal')
+})
+
+await check('reveal is refused for a non-loopback caller', async () => {
+  await writeFile(hindsightFile, JSON.stringify({ apiToken: 'hsk_SECRET' }), 'utf8')
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/reveal',
+    body: { target: 'hindsight' },
+    remoteAddress: '192.168.1.20',
+  })
+  assert.equal(result.status, 403)
+  assert.equal(JSON.stringify(result.json).includes('hsk_SECRET'), false, 'no secret in the refusal')
+})
+
+await check('reveal is POST only, so a prefetch or an <img> cannot trigger it', async () => {
+  await writeFile(hindsightFile, JSON.stringify({ apiToken: 'hsk_SECRET' }), 'utf8')
+  const { ctx } = mount()
+  const result = await call(ctx, { method: 'GET', path: '/dsh-memories/reveal' })
+  assert.equal(result.status, 405)
+  assert.equal(JSON.stringify(result.json).includes('hsk_SECRET'), false)
+})
+
+await check('reveal says so when nothing is stored, instead of returning an empty key', async () => {
+  await writeFile(hindsightFile, JSON.stringify({}), 'utf8')
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/reveal',
+    body: { target: 'hindsight' },
+  })
+  assert.equal(result.status, 400)
+  assert.equal(result.json.ok, false)
+  assert.match(result.json.error, /还没有保存/)
+})
+
+await check('reveal rejects an unknown backend', async () => {
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/reveal',
+    body: { target: 'nope' },
+  })
+  assert.equal(result.status, 400)
+})
+
+await check('the status route still never carries a secret', async () => {
+  // The reveal route exists now, so this is the invariant that keeps it from
+  // becoming the ordinary path: the page's own data payload has no key in it.
+  await writeFile(hindsightFile, JSON.stringify({ apiToken: 'hsk_STATUSLEAK0123456789' }), 'utf8')
+  const { ctx } = mount({ credentials: makeCredentialStore({ AGENTARTS_MEMORY_API_KEY: 'sk-agentarts-leak-test' }) })
+  const result = await call(ctx, { method: 'GET', path: '/dsh-memories/status' })
+  const payload = JSON.stringify(result.json)
+  assert.equal(payload.includes('hsk_STATUSLEAK0123456789'), false)
+  assert.equal(payload.includes('sk-agentarts-leak-test'), false)
+})
+
+await check('reveal returns the same value the badge describes for openviking', async () => {
+  // The harness-scoped spelling is what `describe` reads, so `reveal` has to
+  // read it too: showing a different key than the badge describes would be
+  // worse than showing nothing.
+  await writeFile(
+    openvikingFile,
+    JSON.stringify({ url: 'https://ov.example', plugin: { apiKey: 'shared-key', dsh: { apiKey: 'scoped-key' } } }),
+    'utf8',
+  )
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/reveal',
+    body: { target: 'openviking' },
+  })
+  assert.equal(result.json.ok, true)
+  assert.equal(result.json.value, 'scoped-key', 'the scoped spelling wins, as describe() reports')
+})
+
 /* ---------------- safety and plumbing ---------------- */
 
 await check('an unknown backend is rejected', async () => {
