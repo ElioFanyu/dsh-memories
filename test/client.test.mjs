@@ -241,16 +241,47 @@ check('the address hint describes the address actually stored, not the default',
   assert.equal(/默认地址/.test(hint), false, 'and does not claim the default is in use')
 })
 
-check('the key placeholder is an instruction, not a status report', () => {
+check('a configured key shows dots in the placeholder, never part of the key', () => {
   const inputs = collect(tree, (node) => node.tag === 'input')
   const keyInput = inputs[2]
   const placeholder = String(keyInput.props.placeholder)
-  // "hsk_f…（53 位）　留空则不改动" inside the box reads as a half-typed value
-  // and buries the instruction. The box says what to type; the state lives in
-  // the hint line below it.
-  assert.equal(placeholder, '请输入 API Key')
-  assert.equal(/…（\d+ 位）/.test(placeholder), false, 'no masked value in the placeholder')
-  assert.equal(/留空/.test(placeholder), false, 'no conditional instruction in the placeholder')
+
+  // The box now says "something is configured" by looking filled. What it must
+  // NOT do is carry any identifiable fragment of the stored secret, which is
+  // what `hsk_f…（53 位）` inside the box used to do.
+  assert.match(placeholder, /^•+$/, 'a configured key is represented by dots')
+  assert.equal(/…（\d+ 位）/.test(placeholder), false, 'no truncated key in the placeholder')
+  assert.equal(placeholder.includes('sk-ab'), false, 'no prefix of the stored key')
+  assert.equal(placeholder.includes('hsk'), false, 'no issuer prefix either')
+  // Dots are a decoration and must be distinguishable from a real value, so the
+  // field is still an empty input: `value` stays empty and the dots are the
+  // placeholder. That is what keeps them out of the DOM as data.
+  assert.equal(keyInput.props.value, '', 'the dots are a placeholder, not a value')
+  assert.equal(keyInput.props.className, 'dsh-memories-dots', 'styled as a status decoration')
+})
+
+check('an unconfigured key keeps the plain instruction', () => {
+  const Component = globalThis.__sections.BackendSection
+  const empty = expand(
+    Component({
+      backend: { id: 'openviking', title: 'OpenViking 记忆', hint: 'h', path: 'p', configured: false, writable: true },
+      onSaved: () => {},
+    }),
+  )
+  const keyInput = collect(empty, (node) => node.tag === 'input')[0]
+  assert.equal(String(keyInput.props.placeholder), '请输入 API Key')
+  assert.equal(keyInput.props.className, undefined, 'no dot styling when nothing is stored')
+})
+
+check('the dot run is capped and has a sensible floor', () => {
+  const { dotPlaceholder } = globalThis.__sections
+  // A long certificate must not render a wall of bullets.
+  assert.equal(dotPlaceholder(500).length, 40)
+  // An unknown length still says "something is here".
+  assert.equal(dotPlaceholder(undefined).length, 12)
+  // Short values keep a readable run.
+  assert.ok(dotPlaceholder(3).length >= 8)
+  assert.match(dotPlaceholder(8), /^•+$/)
 })
 
 check('the key hint states which key is saved, in words rather than a fake value', () => {
@@ -274,25 +305,33 @@ check('the key field never echoes a stored secret as its value', () => {
   }
 })
 
-check('a successful key save says the box was cleared on purpose', () => {
+check('a successful key save says the box now shows placeholder dots', () => {
   const { successText } = globalThis.__sections
   assert.equal(typeof successText, 'function')
 
-  // The whole point: an emptied input plus a one-word "已保存" reads as a
-  // failure. The confirmation has to name the clearing.
+  // The box is not empty after this change, but it is also not the key. Both
+  // halves of that have to be said, or the reader has to guess.
   const withKey = successText({ saved: ['Key'], message: '已写入 Hindsight 记忆 的 Key。' })
   assert.match(withKey, /已写入 Hindsight 记忆 的 Key。/)
-  assert.match(withKey, /输入框已清空/, 'the cleared field is explained')
-  assert.match(withKey, /不回显/, 'and says why')
+  assert.match(withKey, /占位点/, 'the dots are named')
+  assert.match(withKey, /不代表真实/, 'and explicitly disclaimed')
 
   // A save that did not touch the key has nothing to explain.
   const noKey = successText({ saved: ['服务地址'], message: '已写入 X 的 服务地址。' })
   assert.equal(noKey, '已写入 X 的 服务地址。')
-  assert.equal(/输入框已清空/.test(noKey), false)
+  assert.equal(/占位点/.test(noKey), false)
 
   // Defensive: an unexpected payload still yields a sentence, never "undefined".
   assert.equal(successText(undefined), '已保存。')
   assert.equal(successText({}), '已保存。')
+})
+
+check('the saved-key hint warns that the dots are not the key', () => {
+  const hints = collect(tree, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
+  const hint = hints.find((text) => /开头，共/.test(text))
+  assert.ok(hint, 'the hint line names the saved key')
+  assert.match(hint, /占位符/, 'it calls the dots a placeholder')
+  assert.match(hint, /不代表真实内容/, 'and says they are not the stored value')
 })
 
 check('the save outcome renders below the button, not as a caption beside it', () => {
@@ -348,6 +387,9 @@ check('the toggle starts in the 显示 state, so nothing is revealed by default'
   for (const toggle of toggles) {
     assert.equal(toggle.props.children, '显示', 'fields must start hidden')
     assert.equal(toggle.props['aria-pressed'], false)
+    // Never disabled: a control that is greyed out for no visible reason sends
+    // the reader looking for a cause that is not there.
+    assert.notEqual(toggle.props.disabled, true)
   }
 })
 
