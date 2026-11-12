@@ -327,6 +327,181 @@ await check('openviking can set the service url on its own', async () => {
   assert.equal(saved.plugin.apiKey, 'ov-key', 'the existing key is kept')
 })
 
+/* ---------------- service address ---------------- */
+
+await check('a file-backed backend rejects an address with no scheme', async () => {
+  await writeFile(hindsightFile, JSON.stringify({ apiToken: 'hsk_keep' }), 'utf8')
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: { target: 'hindsight', url: 'api.example.com' },
+  })
+  assert.equal(result.status, 400)
+  assert.equal(result.json.ok, false)
+  assert.match(result.json.error, /http/)
+  // Nothing was written: a typo must not land in the document as an endpoint.
+  const saved = await readBack(hindsightFile)
+  assert.equal(saved.apiUrl, undefined)
+  assert.equal(saved.apiToken, 'hsk_keep')
+})
+
+await check('every backend that has an address field reports how it is stored', async () => {
+  const { ctx } = mount()
+  const result = await call(ctx, { method: 'GET', path: '/dsh-memories/status' })
+  const { openviking, hindsight, agentarts } = result.json.backends
+  assert.equal(openviking.urlField.where, 'document')
+  assert.equal(hindsight.urlField.where, 'document')
+  // AgentArts keeps its endpoint in the plugin's Loader row, not in a file, so
+  // the page has to write it through configEditor rather than a document write.
+  assert.equal(agentarts.urlField.where, 'row')
+  assert.equal(typeof openviking.urlField.placeholder, 'string')
+})
+
+/* ---------------- the masked key, in both shapes ---------------- */
+
+await check('a configured key yields a prefix and a length, never the key', async () => {
+  const { secretShape, keySummary } = await import('../lib/backends.js')
+  const full = 'hsk_TESTFIXTUREabcdefghijklmnop'
+  const shape = secretShape(full)
+  assert.equal(shape.mask.prefix, 'hsk_T')
+  assert.equal(shape.mask.length, full.length)
+  assert.equal(shape.masked, `hsk_T…（${full.length} 位）`)
+  assert.equal(JSON.stringify(shape).includes(full), false)
+  // Short values degrade instead of revealing more of themselves.
+  assert.equal(keySummary('ab').prefix.length < 2, false)
+  assert.equal(keySummary(''), undefined)
+  assert.equal(keySummary(undefined), undefined)
+})
+
+/* ---------------- AgentArts row-backed fields ---------------- */
+
+/**
+ * Mount with a fake AgentArts Loader row and a `configEditor`.
+ *
+ * The address of a private AgentArts deployment lives in that plugin's row, so
+ * writing it exercises a different path from the file-backed backends — and one
+ * whose failure mode (a cleared endpoint) is invisible until every request
+ * breaks.
+ */
+function mountWithAgentartsRow(config = { spaceId: '', actorId: '', baseUrl: '' }) {
+  const captured = { handler: undefined }
+  const edits = []
+  const row = {
+    options: { name: '@local/dsh-agentarts-memory', id: 'include:dsh-agentarts-memory', config: { ...config } },
+    disabled: false,
+    fiber: {},
+  }
+  const webServer = {
+    register(route) {
+      captured.handler = route.handler
+      return () => {}
+    },
+  }
+  const ctx = {
+    captured,
+    get(name) {
+      if (name === 'webServer') return webServer
+      if (name === 'credentials') return makeCredentialStore()
+      if (name === 'configEditor') {
+        return {
+          async edit(entry, change) {
+            const next = change({ ...entry.options.config })
+            entry.options.config = next
+            edits.push(next)
+          },
+        }
+      }
+      return undefined
+    },
+    inject(_services, run) {
+      run()
+    },
+    logger: { info() {}, warn() {}, error() {} },
+    effect() {},
+    fiber: {},
+    loader: { entries: () => [row] },
+  }
+  apply(ctx, {})
+  return { ctx, row, edits }
+}
+
+await check('agentarts reports its row endpoint as the backend url', async () => {
+  const { ctx } = mountWithAgentartsRow({
+    spaceId: '00000000-0000-4000-8000-000000000000',
+    actorId: '',
+    baseUrl: 'https://memory.cn-southwest-2.huaweicloud-agentarts.com',
+  })
+  const result = await call(ctx, { method: 'GET', path: '/dsh-memories/status' })
+  const { agentarts } = result.json.backends
+  // Without this the address field would seed empty and the next save would
+  // overwrite a working endpoint with nothing.
+  assert.equal(agentarts.url, 'https://memory.cn-southwest-2.huaweicloud-agentarts.com')
+  assert.equal(agentarts.rows.baseUrl, 'https://memory.cn-southwest-2.huaweicloud-agentarts.com')
+})
+
+await check('agentarts stores a custom endpoint in its row, not in a file', async () => {
+  const { ctx, row, edits } = mountWithAgentartsRow()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: {
+      target: 'agentarts',
+      apiKey: 'sk-agentarts',
+      spaceId: '00000000-0000-4000-8000-000000000000',
+      actorId: 'actor-1',
+      url: 'https://memory.internal.example',
+    },
+  })
+  assert.equal(result.json.ok, true)
+  assert.equal(edits.length, 1, 'exactly one row edit')
+  assert.equal(row.options.config.baseUrl, 'https://memory.internal.example')
+  assert.equal(row.options.config.spaceId, '00000000-0000-4000-8000-000000000000')
+  // The key belongs to the credential store and must not be copied into the
+  // patch, where it would be committed and shared.
+  assert.equal(row.options.config.apiKey, '')
+  assert.equal(result.json.backend.url, 'https://memory.internal.example', 'the page sees the new address')
+  // The confirmation names what changed; an unchanged field is not claimed.
+  assert.deepEqual(result.json.saved, ['Key', 'Space ID', 'Actor ID', '服务地址'])
+})
+
+await check('a save that changes nothing says so instead of claiming a write', async () => {
+  const space = '00000000-0000-4000-8000-000000000000'
+  const { ctx } = mountWithAgentartsRow({ spaceId: space, actorId: 'actor-1', baseUrl: '' })
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: { target: 'agentarts', spaceId: space, actorId: 'actor-1' },
+  })
+  assert.equal(result.json.ok, true)
+  assert.deepEqual(result.json.saved, [])
+  assert.match(result.json.message, /没有变化/)
+})
+
+await check('saving only the endpoint does not clear the space id', async () => {
+  const space = '00000000-0000-4000-8000-000000000000'
+  const { ctx, row } = mountWithAgentartsRow({ spaceId: space, actorId: 'actor-1', baseUrl: '' })
+  await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: { target: 'agentarts', url: 'https://memory.internal.example' },
+  })
+  assert.equal(row.options.config.baseUrl, 'https://memory.internal.example')
+  assert.equal(row.options.config.spaceId, space, 'an untouched space id survives')
+  assert.equal(row.options.config.actorId, 'actor-1')
+})
+
+await check('an invalid endpoint is refused before the row is touched', async () => {
+  const { ctx, edits } = mountWithAgentartsRow({ spaceId: 'sp', actorId: '', baseUrl: 'https://keep.example' })
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: { target: 'agentarts', url: 'ftp://nope' },
+  })
+  assert.equal(result.status, 400)
+  assert.equal(edits.length, 0)
+})
+
 /* ---------------- safety and plumbing ---------------- */
 
 await check('an unknown backend is rejected', async () => {

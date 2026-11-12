@@ -122,6 +122,9 @@ const backend = {
   writable: true,
   // What the Host reports for a configured backend: recognisable, not usable.
   masked: 'sk-ab…（35 位）',
+  mask: { prefix: 'sk-ab', length: 35 },
+  // AgentArts' address lives in its Loader row, not in a config document.
+  urlField: { where: 'row', label: '服务地址（可选）', placeholder: '请输入服务地址' },
   rows: {
     configurable: true,
     // Obvious placeholders: a real space id must never end up in a published
@@ -129,6 +132,7 @@ const backend = {
     spaceId: '00000000-0000-4000-8000-000000000000',
     actorId: '11111111-1111-4111-8111-111111111111',
     region: 'cn-southwest-2',
+    baseUrl: 'https://memory.cn-southwest-2.huaweicloud-agentarts.com',
   },
 }
 
@@ -159,25 +163,34 @@ function renderSection() {
 // Render one backend section once; every field assertion reads this tree.
 const tree = renderSection()
 
-check('agentarts masks all three of its fields', () => {
+check('agentarts masks Space, Actor and Key, and leaves the address readable', () => {
   const inputs = collect(tree, (node) => node.tag === 'input')
-  // AgentArts shows Space / Actor / Key (no service-address field), and all
-  // three are values worth keeping off a screenshot.
-  assert.equal(inputs.length, 3, `expected 3 fields for AgentArts, saw ${inputs.length}`)
-  for (const input of inputs) {
+  // AgentArts shows Space / Actor / Key / Address. The first three are values
+  // worth keeping off a screenshot; the address is a URL the user must read.
+  assert.equal(inputs.length, 4, `expected 4 fields for AgentArts, saw ${inputs.length}`)
+  for (const input of inputs.slice(0, 3)) {
     assert.equal(
       input.props.type,
       'password',
       `an input rendered as type="${input.props.type}", so its value would be visible on screen`,
     )
   }
+  assert.equal(inputs[3].props.type, 'text', 'the address is not a secret and is shown as text')
 })
 
-check('only the key is masked; the service address stays readable', () => {
+check('only credentials are masked; a service address stays readable', () => {
   const Component = globalThis.__sections.BackendSection
   const ov = expand(
     Component({
-      backend: { id: 'openviking', title: 'OpenViking', hint: 'h', path: 'p', configured: false, writable: true },
+      backend: {
+        id: 'openviking',
+        title: 'OpenViking',
+        hint: 'h',
+        path: 'p',
+        configured: false,
+        writable: true,
+        urlField: { where: 'document', label: '服务地址（可选）', placeholder: '请输入服务地址' },
+      },
       onSaved: () => {},
     }),
   )
@@ -189,16 +202,65 @@ check('only the key is masked; the service address stays readable', () => {
   assert.equal(inputs[1].props.type, 'text', 'the address is not masked')
 })
 
-check('the key placeholder names the configured key, not the word 已配置', () => {
-  const inputs = collect(tree, (node) => node.tag === 'input')
-  const keyInput = inputs[inputs.length - 1]
-  const placeholder = String(keyInput.props.placeholder)
+check('a backend that declares no address field renders no address input', () => {
+  const Component = globalThis.__sections.BackendSection
+  const none = expand(
+    Component({
+      backend: { id: 'hindsight', title: 'Hindsight', hint: 'h', path: 'p', configured: false, writable: true },
+      onSaved: () => {},
+    }),
+  )
+  assert.equal(collect(none, (node) => node.tag === 'input').length, 1, 'key only')
+})
 
-  // The field must say WHICH key is configured — that is the question a person
-  // has when they open this page. "已配置" alone answers nothing.
-  assert.equal(placeholder.includes('已配置'), false, 'the placeholder must not just say 已配置')
-  assert.match(placeholder, /…（\d+ 位）/, 'the placeholder shows the masked key')
-  assert.match(placeholder, /留空则不改动/, 'and still explains that blank keeps it')
+check('the address hint describes the address actually stored, not the default', () => {
+  const Component = globalThis.__sections.BackendSection
+  const withStored = expand(
+    Component({
+      backend: {
+        id: 'agentarts',
+        title: '华为云 AgentArts 记忆库',
+        hint: 'h',
+        path: 'p',
+        configured: true,
+        writable: true,
+        installed: true,
+        mask: { prefix: 'sk-ab', length: 35 },
+        // A private deployment: the default-address sentence would be wrong.
+        url: 'https://memory.internal.example',
+        urlField: { where: 'row', label: '服务地址（可选）', placeholder: '请输入服务地址' },
+        rows: { configurable: true, spaceId: 'sp', actorId: '' },
+      },
+      onSaved: () => {},
+    }),
+  )
+  const hints = collect(withStored, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
+  const hint = hints.find((text) => /当前为|默认地址/.test(text))
+  assert.ok(hint, 'an address hint is rendered')
+  assert.match(hint, /当前为 https:\/\/memory\.internal\.example/, 'it names the stored address')
+  assert.equal(/默认地址/.test(hint), false, 'and does not claim the default is in use')
+})
+
+check('the key placeholder is an instruction, not a status report', () => {
+  const inputs = collect(tree, (node) => node.tag === 'input')
+  const keyInput = inputs[2]
+  const placeholder = String(keyInput.props.placeholder)
+  // "hsk_f…（53 位）　留空则不改动" inside the box reads as a half-typed value
+  // and buries the instruction. The box says what to type; the state lives in
+  // the hint line below it.
+  assert.equal(placeholder, '请输入 API Key')
+  assert.equal(/…（\d+ 位）/.test(placeholder), false, 'no masked value in the placeholder')
+  assert.equal(/留空/.test(placeholder), false, 'no conditional instruction in the placeholder')
+})
+
+check('the key hint states which key is saved, in words rather than a fake value', () => {
+  const hints = collect(tree, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
+  const hint = hints.find((text) => text.includes('开头，共'))
+  assert.ok(hint, 'the hint line names the saved key')
+  assert.match(hint, /sk-ab 开头，共 35 位/, 'it carries the identifying facts')
+  assert.match(hint, /留空则保持不变/, 'and still explains that blank keeps it')
+  // The full masked string must not be dressed up as a value anywhere.
+  assert.equal(hints.some((text) => text.includes('sk-ab…（35 位）')), false)
 })
 
 check('the key field never echoes a stored secret as its value', () => {
@@ -212,20 +274,23 @@ check('the key field never echoes a stored secret as its value', () => {
   }
 })
 
-check('the badge also names the configured key', () => {
+check('the badge reports a state, not a truncated key', () => {
   const texts = collect(tree, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
-  assert.ok(
-    texts.some((text) => text.includes('sk-ab…（35 位）')),
-    'the section header shows the masked key too',
+  assert.ok(texts.includes('已保存 API Key'), 'the header badge says the key is saved')
+  assert.equal(texts.includes('已配置'), false, 'the old 已配置 wording is gone')
+  assert.equal(
+    texts.some((text) => text.includes('…（')),
+    false,
+    'a pill must not carry a truncated value: it reads as the key itself',
   )
-  assert.equal(texts.includes('已配置'), false, 'no bare 已配置 badge for a configured backend')
 })
 
 check('each masked input is paired with a reveal toggle', () => {
   const inputs = collect(tree, (node) => node.tag === 'input')
+  const masked = inputs.filter((node) => node.props.type === 'password')
   const buttons = collect(tree, (node) => node.tag === 'button')
   const toggles = buttons.filter((button) => /显示|隐藏/.test(String(button.props.children)))
-  assert.equal(toggles.length, inputs.length, 'one toggle per masked field')
+  assert.equal(toggles.length, masked.length, 'one toggle per masked field, and none for the address')
   for (const toggle of toggles) {
     assert.equal(toggle.props.type, 'button', 'a toggle must never submit a form')
     // preventDefault on mousedown keeps focus in the field being edited.
@@ -248,6 +313,7 @@ check('field captions are present for each control', () => {
   assert.ok(spans.includes('Space ID'))
   assert.ok(spans.includes('Actor ID（可选）'))
   assert.ok(spans.includes('API Key'))
+  assert.ok(spans.includes('服务地址（可选）'))
 })
 
 check('a label element never wraps the masked control', () => {
@@ -286,7 +352,7 @@ check('an uninstalled plugin cannot be saved', () => {
   }
 })
 
-check('a section renders the masked key badge for OpenViking when installed', () => {
+check('a section renders the saved-key state for OpenViking when installed', () => {
   // Order itself is asserted in hub.test.mjs against BACKEND_IDS, the single
   // source both halves read; this checks a section renders correctly for a
   // backend other than AgentArts.
@@ -302,13 +368,19 @@ check('a section renders the masked key badge for OpenViking when installed', ()
         writable: true,
         installed: true,
         masked: 'ov-ke…（32 位）',
+        mask: { prefix: 'ov-ke', length: 32 },
         url: 'https://ov.example',
+        urlField: { where: 'document', label: '服务地址（可选）', placeholder: '请输入服务地址' },
       },
       onSaved: () => {},
     }),
   )
   const texts = collect(ov, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
-  assert.ok(texts.includes('ov-ke…（32 位）'), 'the masked openviking key is shown')
+  assert.ok(texts.includes('已保存 API Key'), 'the badge reports the state')
+  assert.ok(
+    texts.some((text) => text.includes('ov-ke 开头，共 32 位')),
+    'the hint names the key by prefix and length',
+  )
   // The URL is readable, not masked. Its VALUE is seeded by an effect, which
   // this stand-in does not run; the input TYPE is what the masking contract is
   // about, so that is what is asserted.
