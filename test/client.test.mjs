@@ -274,6 +274,49 @@ check('the key field never echoes a stored secret as its value', () => {
   }
 })
 
+check('a successful key save says the box was cleared on purpose', () => {
+  const { successText } = globalThis.__sections
+  assert.equal(typeof successText, 'function')
+
+  // The whole point: an emptied input plus a one-word "已保存" reads as a
+  // failure. The confirmation has to name the clearing.
+  const withKey = successText({ saved: ['Key'], message: '已写入 Hindsight 记忆 的 Key。' })
+  assert.match(withKey, /已写入 Hindsight 记忆 的 Key。/)
+  assert.match(withKey, /输入框已清空/, 'the cleared field is explained')
+  assert.match(withKey, /不回显/, 'and says why')
+
+  // A save that did not touch the key has nothing to explain.
+  const noKey = successText({ saved: ['服务地址'], message: '已写入 X 的 服务地址。' })
+  assert.equal(noKey, '已写入 X 的 服务地址。')
+  assert.equal(/输入框已清空/.test(noKey), false)
+
+  // Defensive: an unexpected payload still yields a sentence, never "undefined".
+  assert.equal(successText(undefined), '已保存。')
+  assert.equal(successText({}), '已保存。')
+})
+
+check('the save outcome renders below the button, not as a caption beside it', () => {
+  const Component = globalThis.__sections.BackendSection
+  const section = expand(
+    Component({
+      backend: {
+        id: 'hindsight',
+        title: 'Hindsight 记忆',
+        hint: 'h',
+        path: 'p',
+        configured: false,
+        writable: true,
+        installed: true,
+        urlField: { where: 'document', label: '服务地址（可选）', placeholder: '请输入服务地址' },
+      },
+      onSaved: () => {},
+    }),
+  )
+  // With no save attempted yet there is no notice at all.
+  const statuses = collect(section, (node) => node.props?.role === 'status')
+  assert.equal(statuses.length, 0, 'no empty status strip before the first save')
+})
+
 check('the badge reports a state, not a truncated key', () => {
   const texts = collect(tree, (node) => node.tag === 'span').map((node) => String(node.props.children ?? ''))
   assert.ok(texts.includes('已保存 API Key'), 'the header badge says the key is saved')

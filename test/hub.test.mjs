@@ -478,6 +478,37 @@ await check('a save that changes nothing says so instead of claiming a write', a
   assert.match(result.json.message, /没有变化/)
 })
 
+await check('re-saving the same address does not claim a second write', async () => {
+  await writeFile(hindsightFile, JSON.stringify({ apiToken: 'hsk_keep', apiUrl: 'https://same.example' }), 'utf8')
+  const { ctx } = mount()
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: { target: 'hindsight', url: 'https://same.example' },
+  })
+  assert.equal(result.json.ok, true)
+  // The write is harmless (same bytes), but reporting "已写入…地址" would make
+  // the confirmation meaningless — a save that changed nothing must say so.
+  assert.deepEqual(result.json.saved, [])
+  assert.match(result.json.message, /没有变化/)
+})
+
+await check('a key save reports which key is now stored, not just that it wrote one', async () => {
+  const { ctx } = mount()
+  const full = 'hsk_TESTFIXTURE0123456789'
+  const result = await call(ctx, {
+    method: 'POST',
+    path: '/dsh-memories/save',
+    body: { target: 'hindsight', apiKey: full },
+  })
+  assert.equal(result.json.ok, true)
+  // The page clears the field after a save, so the confirmation is the only
+  // evidence the user gets. It must carry the identifying facts, and it must
+  // still not contain the key.
+  assert.equal(result.json.message.includes(`Key（hsk_T 开头，共 ${full.length} 位）`), true, result.json.message)
+  assert.equal(result.json.message.includes(full), false, 'no full key in the message')
+})
+
 await check('saving only the endpoint does not clear the space id', async () => {
   const space = '00000000-0000-4000-8000-000000000000'
   const { ctx, row } = mountWithAgentartsRow({ spaceId: space, actorId: 'actor-1', baseUrl: '' })
