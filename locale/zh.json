@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "记忆库",
+    "description": "在一页里配置三个记忆后端的凭据：华为 AgentArts、Hindsight、OpenViking。每个 Key 写进对应插件真正读取的位置，只写不读。"
+  }
+}

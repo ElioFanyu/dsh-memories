@@ -1,0 +1,21 @@
+# Memory hub — 三个记忆后端的统一配置页
+#
+# 一行，无需配置即可安装。这一页自己不存任何 Key：它把每个 Key 写进对应
+# 后端真正读取的那份存储，所以这里填完，对应插件立刻读到同一个值。
+#
+#   华为 AgentArts  → <DSH_HOME>/.credentials.yaml （DSH 凭据库）
+#   Hindsight      → ~/.hindsight/coding-agent.json 的 apiToken
+#   OpenViking     → ~/.openviking/ovcli.conf 的 plugin.apiKey
+#
+# 两个路径字段只在默认位置不对时才需要填（非默认的 HINDSIGHT_CONFIG、
+# 共享的 OpenViking 安装等）。
+- insert:
+    - id: dsh-memories
+      name: '@local/dsh-memories'
+      config:
+        # '' = 使用 ~/.hindsight/coding-agent.json
+        hindsightConfigPath: ''
+        # '' = 使用 ~/.openviking/ovcli.conf
+        openvikingConfigPath: ''
+        # 文档里没有 apiUrl 时写这个默认值
+        hindsightApiUrl: https://api.hindsight.vectorize.io

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Memories",
+    "description": "Configure the credentials of three memory backends in one page: Huawei AgentArts, Hindsight and OpenViking. Each key is written to where its own plugin reads it; keys are write-only."
+  }
+}

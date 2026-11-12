@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+*.tgz
+
+# 本地运行时数据与调试痕迹
+*.log
+tmp-*
+.tmp/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
