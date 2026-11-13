@@ -28,15 +28,13 @@
       "platform": "web",
       "immediately": true,
       "inject": [
-        "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-ui-renderer"
       ]
     }
   },
   "engines": {
     "node": ">=20",
-    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.3 <0.2.2 || >=0.2.2-rc.0 <0.3.0-0"
   },
   "license": "MIT",
   "keywords": [
